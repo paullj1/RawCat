@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import os
 import psutil
 import select
@@ -8,6 +9,8 @@ import sys
 
 from argparse import ArgumentParser
 from scapy.all import *
+
+log = logging.getLogger(__name__)
 
 ETH_P_IP = 0x800
 PF_IP = socket.ntohs(ETH_P_IP)
@@ -72,11 +75,26 @@ class RawCat():
     def recv_msg(self, conn):
         p = Ether(self.rawsock.recv(65535))
         if self.for_me(p):
-            print(f'Got packet len: {len(bytes(p[UDP].payload))}')
+            log.debug(f'Got packet len: {len(bytes(p[UDP].payload))}')
             try:
                 conn.send(bytes(p[UDP].payload))
             except BrokenPipeError as e:
                 pass
+
+def init_logging(debug=False):
+    formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
+                                  '[%(name)s] %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    root_logger = logging.getLogger()
+    if debug:
+        handler.setLevel(logging.DEBUG)
+        root_logger.setLevel(logging.DEBUG)
+    else:
+        handler.setLevel(logging.INFO)
+        root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
+
 
 desc = '''Binds a UDS, and transports messages to/from over a packet socket'''
 epi = '''THIS IS A TOY PROJECT, NOT MEANT FOR PRODUCTION TRAFFIC'''
@@ -92,19 +110,22 @@ def parse_args(args):
                         help='Source port for raw socket traffic')
     parser.add_argument('--dst-port', type=int, default=31337,
                         help='Dest port for raw socket traffic')
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help='Enable debugging output')
     parser.add_argument('dstip', type=str, help='Destination IP for raw traffic')
     return parser.parse_args(args)
 
 def main():
     options = parse_args(sys.argv[1:])
-    rs = RawSock(options.dstip,
+    init_logging(options.debug)
+    rc = RawCat(options.dstip,
                  rawsrc=options.src_port,
                  rawdst=options.dst_port,
                  uds=options.sock)
     try:
-        rs.loop()
+        rc.loop()
     except KeyboardInterrupt:
-        del(rs)
+        del(rc)
 
 if __name__ == '__main__':
     main()
