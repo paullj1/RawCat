@@ -16,13 +16,17 @@ ETH_P_IP = 0x800
 PF_IP = socket.ntohs(ETH_P_IP)
 OT_IP = sys.argv[1]
 BUF_SIZE = 1024
+PSH = 0x08
+ACK = 0x10
 
 class RawCat():
-    def __init__(self, dstip, rawsrc=31337, rawdst=31337, uds='/tmp/rawsock'):
+    def __init__(self, dstip, tcp=False, rawsrc=31337, rawdst=31337,
+            uds='/tmp/rawsock'):
         self.rawsrc = rawsrc
         self.rawdst = rawdst
         self.uds = uds
         self.dstip = dstip
+        self.tcp = tcp
         self.rawsock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, PF_IP)
 
         if os.path.exists(uds):
@@ -34,12 +38,13 @@ class RawCat():
 
     def handle_client(self):
         conn, addr = self.uds.accept()
-        while True:
+        while conn:
             r,_,_ = select.select([conn, self.rawsock], [], [])
             for sock in r:
                 if sock == conn:
                     msg = conn.recv(BUF_SIZE)
                     if not msg:
+                        conn = None
                         break
                     self.send_msg(msg)
 
@@ -50,6 +55,11 @@ class RawCat():
         self.rawsock.close()
 
     def for_me(self, p):
+        if self.tcp:
+            return (p.haslayer(TCP) and
+                    p[TCP].dport == self.rawdst and
+                    p[TCP].sport == self.rawsrc and
+                    p[TCP].flags == 'PA')
         return (p.haslayer(UDP) and
                 p[UDP].dport == self.rawdst and
                 p[UDP].sport == self.rawsrc)
@@ -64,21 +74,38 @@ class RawCat():
             payload = msg[:BUF_SIZE]
             msg = msg[BUF_SIZE:]
 
-            p = Ether()/IP(dst=self.dstip)/UDP(dport=self.rawdst,sport=self.rawsrc)/payload
+            p = self.gen_raw_pkt(payload)
             sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, PF_IP)
             sock.bind((self.iface_for_pkt(p), socket.AF_PACKET))
             payload = bytes(p)
             sock.send(bytes(p))
         sock.close()
 
+    def gen_raw_pkt(self, payload):
+        if self.tcp:
+            return Ether()/IP(dst=self.dstip)/TCP(dport=self.rawdst,
+                                                  sport=self.rawsrc,
+                                                  flags=(PSH|ACK))/payload
+        return Ether()/IP(dst=self.dstip)/UDP(dport=self.rawdst,
+                                              sport=self.rawsrc)/payload
+
+    def parse_raw_pkt(self, buf):
+        return Ether(buf)
+
     def recv_msg(self, conn):
-        p = Ether(self.rawsock.recv(65535))
-        if self.for_me(p):
-            log.debug(f'Got packet len: {len(bytes(p[UDP].payload))}')
-            try:
+        p = self.parse_raw_pkt(self.rawsock.recv(65535))
+        if not self.for_me(p):
+            return
+
+        try:
+            if self.tcp:
+                log.debug(f'Got packet len: {len(bytes(p[TCP].payload))}')
+                conn.send(bytes(p[TCP].payload))
+            else:
+                log.debug(f'Got packet len: {len(bytes(p[UDP].payload))}')
                 conn.send(bytes(p[UDP].payload))
-            except BrokenPipeError as e:
-                pass
+        except BrokenPipeError as e:
+            pass
 
 def init_logging(debug=False):
     formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
@@ -105,6 +132,8 @@ def parse_args(args):
 
     parser.add_argument('-s', '--sock', type=str, default='/tmp/rawsock',
                         help='UDS path')
+    parser.add_argument('--tcp', action='store_true', 
+                        help='Use TCP for raw socket')
     parser.add_argument('--src-port', type=int, default=31337,
                         help='Source port for raw socket traffic')
     parser.add_argument('--dst-port', type=int, default=31337,
@@ -118,6 +147,7 @@ def main():
     options = parse_args(sys.argv[1:])
     init_logging(options.debug)
     rc = RawCat(options.dstip,
+                 tcp=options.tcp,
                  rawsrc=options.src_port,
                  rawdst=options.dst_port,
                  uds=options.sock)
