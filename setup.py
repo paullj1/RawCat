@@ -10,6 +10,7 @@ setup(name='rawcat',
       author_email='paullj1@gmail.com',
       packages=['rawcat'],
       install_requires=[
+          'psutil',
           'scapy'
       ],
       entry_points = {
