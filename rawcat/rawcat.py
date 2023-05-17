@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 ETH_P_IP = 0x800
 PF_IP = socket.ntohs(ETH_P_IP)
 OT_IP = sys.argv[1]
+BUF_SIZE = 1024
 
 class RawCat():
     def __init__(self, dstip, rawsrc=31337, rawdst=31337, uds='/tmp/rawsock'):
@@ -31,21 +32,19 @@ class RawCat():
         self.uds.bind(uds)
         self.uds.listen(1)
 
-    def loop(self):
+    def handle_client(self):
+        conn, addr = self.uds.accept()
         while True:
-            conn, addr = self.uds.accept()
-            while conn:
-                r,_,_ = select.select([conn, self.rawsock], [], [])
-                for sock in r:
-                    if sock == conn:
-                        msg = conn.recv(8192)
-                        if not msg:
-                            conn = None
-                            break
-                        self.send_msg(msg)
+            r,_,_ = select.select([conn, self.rawsock], [], [])
+            for sock in r:
+                if sock == conn:
+                    msg = conn.recv(BUF_SIZE)
+                    if not msg:
+                        break
+                    self.send_msg(msg)
 
-                    elif sock == self.rawsock:
-                        self.recv_msg(conn)
+                elif sock == self.rawsock:
+                    self.recv_msg(conn)
 
     def __del__(self):
         self.rawsock.close()
@@ -62,8 +61,8 @@ class RawCat():
 
     def send_msg(self, msg):
         while len(msg) > 0:
-            payload = msg[:1024]
-            msg = msg[1024:]
+            payload = msg[:BUF_SIZE]
+            msg = msg[BUF_SIZE:]
 
             p = Ether()/IP(dst=self.dstip)/UDP(dport=self.rawdst,sport=self.rawsrc)/payload
             sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, PF_IP)
@@ -123,7 +122,8 @@ def main():
                  rawdst=options.dst_port,
                  uds=options.sock)
     try:
-        rc.loop()
+        while True:
+            rc.handle_client()
     except KeyboardInterrupt:
         del(rc)
 
