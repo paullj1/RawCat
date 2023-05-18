@@ -46,7 +46,10 @@ class RawCat():
 
             self.rawsock.flush_inbuff(conn)
             if datetime.now() > retry_timer:
-                log.debug(f"Queues: Out: {len(self.rawsock.outbuff.keys())} In: {len(self.rawsock.inbuff.keys())}")
+                log.debug("Queues: Out: %d In: %d", (
+                    len(self.rawsock.outbuff.keys()),
+                    len(self.rawsock.inbuff.keys())
+                ))
                 retry_timer = self.get_retry_delay()
                 self.rawsock.retry_unackd()
         self.rawsock.reset()
