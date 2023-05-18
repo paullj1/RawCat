@@ -8,3 +8,7 @@ PF_IP = socket.ntohs(ETH_P_IP)
 BUF_SIZE = 1024
 MAX_SEQ = 0xFFFF
 MAX_RECV = 0xFFFF
+
+SYN = 0x02
+PSH = 0x08
+ACK = 0x10

@@ -28,6 +28,7 @@ class RawCat():
 
     def handle_client(self):
         conn, addr = self.uds.accept()
+        self.rawsock.init_stream()
         while conn:
             r,_,_ = select.select([conn, self.rawsock.recvsock], [], [])
             for sock in r:

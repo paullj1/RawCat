@@ -8,10 +8,6 @@ import struct
 from scapy.all import *
 from .constants import *
 
-SYN = 0x02
-PSH = 0x08
-ACK = 0x10
-
 log = logging.getLogger(__name__)
 
 class ReliableRawSocket():
@@ -47,7 +43,7 @@ class ReliableRawSocket():
                 payload = bytes(p[TCP].payload)
             else:
                 buf = bytes(p[UDP].payload)
-                flags, seq = struct.unpack('@BI', buf[0:3])
+                flags, seq = struct.unpack('=BH', buf[0:3])
                 payload = buf[3:]
 
             log.debug(f'Got packet len: {len(payload)}, flags: {flags}, seq: {seq}')
@@ -69,19 +65,21 @@ class ReliableRawSocket():
 
             # Received actual message, in order, send to connected client
             elif seq == self.inseq and flags & PSH == PSH and len(payload) > 0:
-                self.inseq += 1
+                self.inseq = (self.inseq + 1) % MAX_SEQ
                 conn.send(payload)
 
                 # Now flush any pending messages
+                # TODO Handle wrap around
                 sorted_keys = list(self.inbuff.keys()).sort()
+#               while sorted_keys[0] 
                 while sorted_keys and len(sorted_keys) > 0 and sorted_keys[0] == self.inseq:
                     conn.send(self.inbuff.pop(0))
-                    self.inseq += 1
+                    self.inseq = (self.inseq + 1) % MAX_SEQ
             else:
                 self.inbuff[self.inseq] = payload
 
         except BrokenPipeError as e:
-            pass
+            log.debug("UDS connection closed by peer")
 
     def reset(self, seq=None):
         self.inbuff = dict()
@@ -121,7 +119,7 @@ class ReliableRawSocket():
                                                   sport=self.rawsrc,
                                                   seq=seq,
                                                   flags=flags)/payload
-        raw = struct.pack('@BI', flags, seq) + payload
+        raw = struct.pack('=BH', flags, seq % MAX_SEQ) + payload
         return Ether()/IP(dst=self.dstip)/UDP(dport=self.rawdst,
                                               sport=self.rawsrc)/raw
 
