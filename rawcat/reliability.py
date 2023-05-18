@@ -24,7 +24,7 @@ class ReliableRawSocket():
         self.inbuff = dict()
         self.outbuff = dict()
         self.inseq = None
-        self.outseq = None
+        self.outseq = random.randint(0,MAX_SEQ)
 
     def __del__(self):
         self.recvsock.close()
@@ -46,21 +46,30 @@ class ReliableRawSocket():
                 payload = buf[3:]
 
             log.debug(f'Got packet len: {len(payload)}, flags: {flags}, seq: {seq}')
-            if not self.inseq:
+            if self.inseq:
+                log.debug(f'Expecting seq: {self.inseq}')
+            else:
                 self.inseq = seq
-            log.debug(f'Expecting seq: {self.inseq}')
 
             # Request to initialize session
-            if flags & SYN == SYN:
-                self.receive_connection(seq)
+            if flags == FIN:
+                log.debug(f'Fin packet with seq: {seq}')
+                conn.close()
+                self.send_pkt(seq=seq, flags=ACK)
+                self.reset()
+                return
 
             # Ack for sent message; delete from outbuff
-            elif flags & ACK == ACK and seq in self.outbuff:
+            if flags == ACK:
                 log.debug(f'Ack packet for seq: {seq}')
-                self.outbuff.pop(seq)
+                if seq in self.outbuff:
+                    self.outbuff.pop(seq)
+                return
 
-            # Received actual message, in order, send to connected client
-            elif seq == self.inseq and flags & PSH == PSH and len(payload) > 0:
+            # Received message, in order, send to connected client
+            if seq == self.inseq and flags & PSH == PSH and len(payload) > 0:
+                self.send_pkt(seq=seq, flags=ACK)
+
                 self.inseq = (self.inseq + 1) % MAX_SEQ
                 conn.send(payload)
 
@@ -71,32 +80,28 @@ class ReliableRawSocket():
                 while sorted_keys and len(sorted_keys) > 0 and sorted_keys[0] == self.inseq:
                     conn.send(self.inbuff.pop(0))
                     self.inseq = (self.inseq + 1) % MAX_SEQ
-            else:
-                self.inbuff[self.inseq] = payload
+                return
 
-            # Don't ack acks
-            if flags != ACK:
+            # Finally, must be out of order; ack/store it
+            if self.inseq:
                 self.send_pkt(seq=seq, flags=ACK)
+                self.inbuff[self.inseq] = payload
 
         except BrokenPipeError as e:
             log.debug("UDS connection closed by peer")
+            self.reset()
 
-    def receive_connection(self, seq=None):
-        log.debug(f'Got SYNc packet... init session with seq: {seq}')
+    def reset(self):
+        self.inseq = None
+        self.outseq = random.randint(0,MAX_SEQ)
         self.inbuff = dict()
         self.outbuff = dict()
-        self.inseq = seq
-        self.outseq = None
 
-    def connect(self):
-        self.outseq = random.randint(0,MAX_SEQ)
-        self.send_pkt(flags=SYN)
-        log.debug(f"Init stream with seq: {self.outseq}")
+    def fin(self):
+        self.send_pkt(flags=FIN)
+        self.reset()
 
     def send_msg(self, msg):
-        if not self.outseq:
-            self.connect()
-
         while len(msg) > 0:
             payload = msg[:BUF_SIZE]
             msg = msg[BUF_SIZE:]
@@ -114,7 +119,7 @@ class ReliableRawSocket():
             seq = self.outseq
             self.outseq = (self.outseq + 1) % MAX_SEQ
 
-        if flags & PSH == PSH or flags & SYN == ACK:
+        if flags & PSH == PSH or flags & FIN == FIN:
             self.outbuff[seq] = (payload, flags)
 
         log.debug(f"Sending message len: {len(payload)}, seq: {seq}, flags: {flags}")
@@ -140,7 +145,7 @@ class ReliableRawSocket():
             return (p.haslayer(TCP) and
                     p[TCP].dport == self.rawdst and
                     p[TCP].sport == self.rawsrc and
-                    p[TCP].flags == 'PA')
+                    p[TCP].flags in ['F', 'PA'])
         return (p.haslayer(UDP) and
                 p[UDP].dport == self.rawdst and
                 p[UDP].sport == self.rawsrc)

@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 class RawCat():
     def __init__(self, dstip, tcp=False, rawsrc=31337, rawdst=31337,
             uds='/tmp/rawsock'):
-        self.uds = uds
+        self.uds_path = uds
         self.rawsock = ReliableRawSocket(dstip, tcp, rawsrc, rawdst)
 
         if os.path.exists(uds):
@@ -29,15 +29,15 @@ class RawCat():
 
     def handle_client(self):
         conn, addr = self.uds.accept()
-        self.rawsock.connect()
-        retry_timer = datetime.now() + timedelta(seconds=2)
-        while conn:
+        retry_timer = self.get_retry_delay()
+        while conn.fileno() > 0:
             r,_,_ = select.select([conn, self.rawsock.recvsock], [], [], 2)
             for sock in r:
                 if sock == conn:
                     msg = conn.recv(BUF_SIZE)
                     if not msg:
-                        conn = None
+                        conn.close()
+                        self.rawsock.fin()
                         break
                     self.rawsock.send_msg(msg)
 
@@ -45,8 +45,11 @@ class RawCat():
                     self.rawsock.recv_msg(conn)
 
             if datetime.now() > retry_timer:
-                retry_timer = datetime.now() + timedelta(seconds=2)
+                retry_timer = self.get_retry_delay()
                 self.rawsock.retry_unackd()
+
+    def get_retry_delay(self):
+        return datetime.now() + timedelta(milliseconds=200)
 
 def init_logging(debug=False):
     formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
