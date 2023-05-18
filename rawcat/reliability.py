@@ -36,7 +36,7 @@ class ReliableRawSocket():
         self.sendsock.close()
 
     def recv_msg(self, conn):
-        p = self.parse_raw_pkt(self.recvsock.recv(BUF_SIZE))
+        p = self.parse_raw_pkt(self.recvsock.recv(MAX_RECV))
         if not self.for_me(p):
             return
 
