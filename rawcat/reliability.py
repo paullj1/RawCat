@@ -49,6 +49,7 @@ class ReliableRawSocket():
             if self.inseq:
                 log.debug(f'Expecting seq: {self.inseq}')
             else:
+                log.debug(f'Received init packet; setting inseq: {seq}')
                 self.inseq = seq
 
             # Request to initialize session
@@ -66,26 +67,15 @@ class ReliableRawSocket():
                     self.outbuff.pop(seq)
                 return
 
-            # Received message, in order, send to connected client
-            if seq == self.inseq and flags & PSH == PSH and len(payload) > 0:
+            # Re-ack already consumed sequences
+            if seq < self.inseq:
                 self.send_pkt(seq=seq, flags=ACK)
-
-                self.inseq = (self.inseq + 1) % MAX_SEQ
-                conn.send(payload)
-
-                # Now flush any pending messages
-                # TODO Handle wrap around
-                sorted_keys = list(self.inbuff.keys()).sort()
-#               while sorted_keys[0] 
-                while sorted_keys and len(sorted_keys) > 0 and sorted_keys[0] == self.inseq:
-                    conn.send(self.inbuff.pop(0))
-                    self.inseq = (self.inseq + 1) % MAX_SEQ
                 return
 
-            # Finally, must be out of order; ack/store it
-            if self.inseq:
-                self.send_pkt(seq=seq, flags=ACK)
-                self.inbuff[self.inseq] = payload
+            self.send_pkt(seq=seq, flags=ACK)
+            self.inbuff[seq] = payload
+            self.flush_inbuff(conn)
+            return
 
         except BrokenPipeError as e:
             log.debug("UDS connection closed by peer")
@@ -107,9 +97,21 @@ class ReliableRawSocket():
             msg = msg[BUF_SIZE:]
             self.send_pkt(payload=payload)
 
+    # TODO Handle wrap around
+    def flush_inbuff(self, conn):
+        sorted_keys = list(self.inbuff.keys())
+        sorted_keys.sort()
+#       while sorted_keys[0] 
+        while len(sorted_keys) > 0 and sorted_keys[0] == self.inseq:
+            log.debug(f"Keys: {self.inbuff.keys()}, Expecting: {self.inseq}")
+            payload = self.inbuff.pop(self.inseq)
+            conn.send(payload)
+            self.inseq = (self.inseq + 1) % MAX_SEQ
+        return
+
     def retry_unackd(self):
         for k in self.outbuff.keys():
-            log.debug(f"Retry on seq: {k}")
+            log.info(f"Retry on seq: {k}")
             m,f = self.outbuff[k]
             self.send_pkt(payload=m, seq=k, flags=f)
 

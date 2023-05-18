@@ -31,7 +31,7 @@ class RawCat():
         conn, addr = self.uds.accept()
         retry_timer = self.get_retry_delay()
         while conn.fileno() > 0:
-            r,_,_ = select.select([conn, self.rawsock.recvsock], [], [], 2)
+            r,_,_ = select.select([conn, self.rawsock.recvsock], [], [])
             for sock in r:
                 if sock == conn:
                     msg = conn.recv(BUF_SIZE)
@@ -44,9 +44,12 @@ class RawCat():
                 elif sock == self.rawsock.recvsock:
                     self.rawsock.recv_msg(conn)
 
+            self.rawsock.flush_inbuff(conn)
             if datetime.now() > retry_timer:
+                log.debug(f"Queues: Out: {len(self.rawsock.outbuff.keys())} In: {len(self.rawsock.inbuff.keys())}")
                 retry_timer = self.get_retry_delay()
                 self.rawsock.retry_unackd()
+        self.rawsock.reset()
 
     def get_retry_delay(self):
         return datetime.now() + timedelta(milliseconds=200)
