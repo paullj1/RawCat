@@ -99,10 +99,7 @@ class ReliableRawSocket():
 
     # TODO Handle wrap around
     def flush_inbuff(self, conn):
-        sorted_keys = list(self.inbuff.keys())
-        sorted_keys.sort()
-#       while sorted_keys[0] 
-        while len(sorted_keys) > 0 and sorted_keys[0] == self.inseq:
+        while self.inseq in self.inbuff:
             log.debug(f"Keys: {self.inbuff.keys()}, Expecting: {self.inseq}")
             payload = self.inbuff.pop(self.inseq)
             conn.send(payload)
