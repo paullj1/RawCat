@@ -97,7 +97,6 @@ class ReliableRawSocket():
             msg = msg[BUF_SIZE:]
             self.send_pkt(payload=payload)
 
-    # TODO Handle wrap around
     def flush_inbuff(self, conn):
         while self.inseq in self.inbuff:
             log.debug(f"Keys: {self.inbuff.keys()}, Expecting: {self.inseq}")
