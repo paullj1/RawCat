@@ -7,6 +7,7 @@ import socket
 import sys
 
 from argparse import ArgumentParser
+from datetime import datetime, timedelta
 
 from .constants import *
 from .reliability import ReliableRawSocket
@@ -28,9 +29,10 @@ class RawCat():
 
     def handle_client(self):
         conn, addr = self.uds.accept()
-        self.rawsock.init_stream()
+        self.rawsock.connect()
+        retry_timer = datetime.now() + timedelta(seconds=2)
         while conn:
-            r,_,_ = select.select([conn, self.rawsock.recvsock], [], [])
+            r,_,_ = select.select([conn, self.rawsock.recvsock], [], [], 2)
             for sock in r:
                 if sock == conn:
                     msg = conn.recv(BUF_SIZE)
@@ -41,6 +43,10 @@ class RawCat():
 
                 elif sock == self.rawsock.recvsock:
                     self.rawsock.recv_msg(conn)
+
+            if datetime.now() > retry_timer:
+                retry_timer = datetime.now() + timedelta(seconds=2)
+                self.rawsock.retry_unackd()
 
 def init_logging(debug=False):
     formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '

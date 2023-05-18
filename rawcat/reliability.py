@@ -19,8 +19,7 @@ class ReliableRawSocket():
 
         self.recvsock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, PF_IP)
         self.sendsock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, PF_IP)
-        p = self.gen_raw_pkt(b'',0,PSH)
-        self.sendsock.bind((self.iface_for_pkt(p), socket.AF_PACKET))
+        self.sendsock.bind((self.get_source_addr(), socket.AF_PACKET))
 
         self.inbuff = dict()
         self.outbuff = dict()
@@ -50,18 +49,15 @@ class ReliableRawSocket():
             if not self.inseq:
                 self.inseq = seq
             log.debug(f'Expecting seq: {self.inseq}')
-            self.send_pkt(seq=seq, flags=ACK)
 
             # Request to initialize session
             if flags & SYN == SYN:
-                self.reset(seq)
-                log.debug(f'Got SYNc packet... init session with seq: {seq}')
+                self.receive_connection(seq)
 
             # Ack for sent message; delete from outbuff
-            elif flags & ACK == ACK and len(payload) == 0:
+            elif flags & ACK == ACK and seq in self.outbuff:
                 log.debug(f'Ack packet for seq: {seq}')
-                if seq in self.outbuff.keys():
-                    self.outbuff.pop(seq)
+                self.outbuff.pop(seq)
 
             # Received actual message, in order, send to connected client
             elif seq == self.inseq and flags & PSH == PSH and len(payload) > 0:
@@ -78,38 +74,51 @@ class ReliableRawSocket():
             else:
                 self.inbuff[self.inseq] = payload
 
+            # Don't ack acks
+            if flags != ACK:
+                self.send_pkt(seq=seq, flags=ACK)
+
         except BrokenPipeError as e:
             log.debug("UDS connection closed by peer")
 
-    def reset(self, seq=None):
+    def receive_connection(self, seq=None):
+        log.debug(f'Got SYNc packet... init session with seq: {seq}')
         self.inbuff = dict()
         self.outbuff = dict()
         self.inseq = seq
-        self.outseq = random.randint(0,MAX_SEQ)
+        self.outseq = None
 
-    def init_stream(self):
+    def connect(self):
         self.outseq = random.randint(0,MAX_SEQ)
-        self.send_pkt(seq=self.outseq, flags=SYN)
+        self.send_pkt(flags=SYN)
         log.debug(f"Init stream with seq: {self.outseq}")
 
     def send_msg(self, msg):
         if not self.outseq:
-            self.init_stream()
+            self.connect()
 
         while len(msg) > 0:
             payload = msg[:BUF_SIZE]
             msg = msg[BUF_SIZE:]
-            self.outbuff[self.outseq] = payload
-            self.send_pkt(payload, seq=self.outseq)
-            self.outseq += 1
+            self.send_pkt(payload=payload)
 
-        # Re-transmit any un-ack'd messages
+    def retry_unackd(self):
         for k in self.outbuff.keys():
-            self.send_pkt(self.outbuff[k], seq=k)
+            log.debug(f"Retry on seq: {k}")
+            m,f = self.outbuff[k]
+            self.send_pkt(payload=m, seq=k, flags=f)
 
-    def send_pkt(self, msg=b'', seq=None, flags=(PSH|ACK)):
-        log.debug(f"Sending message len: {len(msg)}, seq: {seq}, flags: {flags}")
-        p = self.gen_raw_pkt(msg, seq, flags)
+    def send_pkt(self, payload=b'', seq=None, flags=(PSH|ACK)):
+
+        if not seq:
+            seq = self.outseq
+            self.outseq = (self.outseq + 1) % MAX_SEQ
+
+        if flags & PSH == PSH or flags & SYN == ACK:
+            self.outbuff[seq] = (payload, flags)
+
+        log.debug(f"Sending message len: {len(payload)}, seq: {seq}, flags: {flags}")
+        p = self.gen_raw_pkt(payload, seq, flags)
         payload = bytes(p)
         self.sendsock.send(bytes(p))
 
@@ -136,7 +145,8 @@ class ReliableRawSocket():
                 p[UDP].dport == self.rawdst and
                 p[UDP].sport == self.rawsrc)
 
-    def iface_for_pkt(self, p):
+    def get_source_addr(self):
+        p = self.gen_raw_pkt(b'',0,PSH)
         return [k for k,v in psutil.net_if_addrs().items() if p.payload.src in 
                    [a.address for a in v]
                ][0]
